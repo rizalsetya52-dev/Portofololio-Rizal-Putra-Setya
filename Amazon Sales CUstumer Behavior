@@ -1,0 +1,274 @@
+--Social Proof (1) REVIEW - PURCHASE CATEGORIES - Car Abandonment 
+WITH TrustMatrix AS (
+    SELECT 
+        purchase_categories,
+        cart_abandonment_factors,
+        CASE 
+            WHEN customer_reviews_importance IN (4, 5) AND review_reliability IN ('Heavily', 'Moderately') THEN ' The Devotees (High Expectation, High Trust)'
+            WHEN customer_reviews_importance IN (4, 5) AND review_reliability IN ('Rarely', 'Never') THEN ' The Disappointed (High Expectation, Broken Trust)'
+            WHEN customer_reviews_importance IN (1, 2) AND review_reliability IN ('Heavily', 'Moderately') THEN ' The Pragmatists (Low Expectation, High Trust)'
+            WHEN customer_reviews_importance IN (1, 2) AND review_reliability IN ('Rarely', 'Never') THEN 'The Cynics (Zero Expectation, Zero Trust)'
+        END AS trust_segment
+    FROM amazon_behavior
+    WHERE cart_abandonment_factors IS NOT NULL
+),
+RankedFactors AS (
+    SELECT 
+        purchase_categories,
+        trust_segment,
+        cart_abandonment_factors,
+        COUNT(*) AS total_abandonment,
+        SUM(COUNT(*)) OVER(PARTITION BY purchase_categories) AS total_category_population,
+        ROW_NUMBER() OVER(PARTITION BY purchase_categories, trust_segment ORDER BY COUNT(*) DESC) AS rn
+    FROM TrustMatrix
+    WHERE trust_segment IS NOT NULL 
+    GROUP BY purchase_categories, trust_segment, cart_abandonment_factors
+)
+SELECT 
+    purchase_categories,
+    total_category_population,
+    trust_segment,
+    total_abandonment,
+    cart_abandonment_factors AS top_factors
+FROM RankedFactors
+WHERE rn IN (1, 2, 3)              -- Mengambil Juara 1 dan Juara 2
+  AND total_abandonment >= 20   -- Eliminasi jumlah di bawah 20 (Threshold)
+ORDER BY purchase_categories, trust_segment, rn;
+
+-------------------------------------------------------------------------------------------------------------
+--------------------------------------------------------------------------------------------------------------
+---- AI Algoritma
+
+WITH RecommendationMatrix AS (
+    SELECT 
+        cart_abandonment_factors,
+        CASE 
+            WHEN personalized_recommendation_score IN (4, 5) AND rating_accuracy_score IN (4, 5) THEN '1. High Freq, High Relevance'
+            WHEN personalized_recommendation_score IN (4, 5) AND rating_accuracy_score IN (1, 2) THEN '2. High Freq, Low Relevance'
+            WHEN personalized_recommendation_score IN (1, 2) AND rating_accuracy_score IN (4, 5) THEN '3. Low Freq, High Relevance'
+            WHEN personalized_recommendation_score IN (1, 2) AND rating_accuracy_score IN (1, 2) THEN '4. Low Freq, Low Relevance'
+        END AS rec_segment
+    FROM amazon_behavior
+    WHERE cart_abandonment_factors IS NOT NULL
+      AND LOWER(cart_abandonment_factors) != 'others' -- Filter Out Noise
+      AND personalized_recommendation_score IS NOT NULL 
+      AND rating_accuracy_score IS NOT NULL
+),
+RankedFactors AS (
+    SELECT 
+        rec_segment,
+        cart_abandonment_factors,
+        COUNT(*) AS total_abandonment,
+        ROW_NUMBER() OVER(PARTITION BY rec_segment ORDER BY COUNT(*) DESC) AS rn
+    FROM RecommendationMatrix
+    WHERE rec_segment IS NOT NULL 
+    GROUP BY rec_segment, cart_abandonment_factors
+)
+SELECT 
+    rec_segment,
+    rn AS rank,
+    total_abandonment,
+    cart_abandonment_factors AS top_abandonment_reason
+FROM RankedFactors
+WHERE rn <= 2 -- Buang alasan ketiga agar Heatmap Power BI lebih rapi
+ORDER BY rec_segment, rn;
+
+WITH RecommendationMatrix AS (
+    SELECT 
+        cart_abandonment_factors,
+        personalized_recommendation_frequency,
+        CASE 
+            -- Segmen 1: Skor Tinggi & Akurasi Tinggi (Untuk Yes & Sometimes)
+            WHEN personalized_recommendation_frequency IN ('Yes', 'Sometimes') 
+                 AND personalized_recommendation_score IN (4, 5) 
+                 AND rating_accuracy_score IN (4, 5) THEN '1. High Relevance'
+            
+            -- Segmen 2: Skor Tinggi tapi Akurasi Rendah (Untuk Yes & Sometimes)
+            WHEN personalized_recommendation_frequency IN ('Yes', 'Sometimes') 
+                 AND personalized_recommendation_score IN (4, 5) 
+                 AND rating_accuracy_score IN (1, 2) THEN '2. High Score, Low Accuracy'
+            
+            -- Segmen 3: Skor Rendah tapi Akurasi Tinggi (Untuk Yes & Sometimes)
+            WHEN personalized_recommendation_frequency IN ('Yes', 'Sometimes') 
+                 AND personalized_recommendation_score IN (1, 2) 
+                 AND rating_accuracy_score IN (4, 5) THEN '3. Low Score, High Accuracy'
+            
+            -- Segmen 4: Skor Rendah & Akurasi Rendah (Untuk Yes & Sometimes)
+            WHEN personalized_recommendation_frequency IN ('Yes', 'Sometimes') 
+                 AND personalized_recommendation_score IN (1, 2) 
+                 AND rating_accuracy_score IN (1, 2) THEN '4. Low Relevance'
+        END AS rec_segment
+    FROM amazon_behavior
+    WHERE cart_abandonment_factors IS NOT NULL
+      AND LOWER(cart_abandonment_factors) != 'others' 
+      AND personalized_recommendation_score IS NOT NULL 
+      AND rating_accuracy_score IS NOT NULL
+      AND personalized_recommendation_frequency IN ('Yes', 'Sometimes')
+),
+RankedFactors AS (
+    SELECT 
+        rec_segment,
+        personalized_recommendation_frequency,
+        cart_abandonment_factors,
+        COUNT(*) AS total_abandonment,
+        ROW_NUMBER() OVER(
+            PARTITION BY rec_segment, personalized_recommendation_frequency 
+            ORDER BY COUNT(*) DESC
+        ) AS rn
+    FROM RecommendationMatrix
+    WHERE rec_segment IS NOT NULL 
+    GROUP BY rec_segment, personalized_recommendation_frequency, cart_abandonment_factors
+)
+SELECT 
+    rec_segment,
+    personalized_recommendation_frequency,
+    rn AS rank,
+    total_abandonment,
+    cart_abandonment_factors AS top_abandonment_reason
+FROM RankedFactors
+WHERE rn <= 2 
+ORDER BY rec_segment, personalized_recommendation_frequency, rn;
+
+
+
+
+
+
+
+
+
+-------------------------------------------------------------------------------------------------------------
+--CHOICE 0VERLOAD FROM HUMAN
+-- XXXXX
+
+WITH TrustMatrix AS (
+    SELECT 
+        cart_abandonment_factors,
+        CASE 
+            WHEN customer_reviews_importance IN (4, 5) AND review_reliability IN ('Heavily', 'Moderately') THEN '1. The Devotees (High Expectation & Trust)'
+            WHEN customer_reviews_importance IN (4, 5) AND review_reliability IN ('Rarely', 'Never') THEN '2. The Disappointed (High Expectation, Broken Trust)'
+            WHEN customer_reviews_importance IN (1, 2) AND review_reliability IN ('Heavily', 'Moderately') THEN '3. The Pragmatists (Low Expectation, High Trust)'
+            WHEN customer_reviews_importance IN (1, 2) AND review_reliability IN ('Rarely', 'Never') THEN '4. The Cynics (Zero Expectation & Trust)'
+        END AS trust_segment
+    FROM amazon_behavior
+    WHERE cart_abandonment_factors IS NOT NULL
+      AND LOWER(cart_abandonment_factors) != 'others'
+),
+SegmentPopulation AS (
+    SELECT 
+        trust_segment,
+        COUNT(*) AS total_segment_population
+    FROM TrustMatrix
+    WHERE trust_segment IS NOT NULL
+    GROUP BY trust_segment
+),
+RankedFactors AS (
+    SELECT 
+        t.trust_segment,
+        t.cart_abandonment_factors,
+        COUNT(*) AS total_abandonment,
+        ROW_NUMBER() OVER(PARTITION BY t.trust_segment ORDER BY COUNT(*) DESC) AS rn
+    FROM TrustMatrix t
+    WHERE t.trust_segment IS NOT NULL 
+    GROUP BY t.trust_segment, t.cart_abandonment_factors
+)
+SELECT 
+    r.trust_segment,
+    r.total_abandonment,
+    s.total_segment_population,
+    r.cart_abandonment_factors AS top_abandonment_reason
+FROM RankedFactors r
+JOIN SegmentPopulation s ON r.trust_segment = s.trust_segment
+WHERE r.rn <= 2 
+ORDER BY r.trust_segment, r.rn;
+---------------------------------------------------------------------------------------------------------------
+---SaveForLater OR Cognitive Offloading
+WITH MicroActionPersona AS (
+    SELECT 
+        cart_abandonment_factors,
+        CASE 
+            WHEN add_to_cart_browsing IN ('Yes', 'Maybe') AND saveforlater_frequency IN ('Always', 'Often', 'Sometimes') 
+            THEN '1. High Cognitive Offloader (Cart as Memory)'
+            
+            WHEN add_to_cart_browsing IN ('Yes', 'Maybe') AND saveforlater_frequency IN ('Rarely', 'Never') 
+            THEN '2. Transient Browser (High Impulsivity)'
+            
+            WHEN add_to_cart_browsing = 'No' AND saveforlater_frequency IN ('Always', 'Often', 'Sometimes') 
+            THEN '3. Cautious Planner (Explicit Save)'
+            
+            WHEN add_to_cart_browsing = 'No' AND saveforlater_frequency IN ('Rarely', 'Never') 
+            THEN '4. Intent-Driven Buyer (Cart for Checkout)'
+        END AS offloading_behavior
+    FROM amazon_behavior
+    WHERE cart_abandonment_factors IS NOT NULL
+      AND LOWER(cart_abandonment_factors) != 'others' -- Filter Out Noise
+      AND add_to_cart_browsing IS NOT NULL
+      AND saveforlater_frequency IS NOT NULL
+),
+SegmentPopulation AS (
+    SELECT 
+        offloading_behavior,
+        COUNT(*) AS total_segment_population
+    FROM MicroActionPersona
+    GROUP BY offloading_behavior
+),
+RankedFactors AS (
+    SELECT 
+        mp.offloading_behavior,
+        mp.cart_abandonment_factors,
+        COUNT(*) AS total_abandonment,
+        ROW_NUMBER() OVER(PARTITION BY mp.offloading_behavior ORDER BY COUNT(*) DESC) AS rn
+    FROM MicroActionPersona mp
+    WHERE mp.offloading_behavior IS NOT NULL
+    GROUP BY mp.offloading_behavior, mp.cart_abandonment_factors
+)
+SELECT 
+    r.offloading_behavior,
+    r.total_abandonment,
+    s.total_segment_population,
+    r.cart_abandonment_factors AS top_abandonment_reason
+FROM RankedFactors r
+JOIN SegmentPopulation s ON r.offloading_behavior = s.offloading_behavior
+WHERE r.rn <= 2 -- Hanya ambil 2 alasan utama
+ORDER BY r.offloading_behavior, r.rn;
+
+
+---------------------------------------------------------------------------------------------------------------
+----Demografi & Kebiasaan Dasar
+SELECT DISTINCT age FROM amazon_behavior ORDER BY age;
+SELECT DISTINCT gender FROM amazon_behavior;
+SELECT DISTINCT purchase_frequency FROM amazon_behavior;
+SELECT DISTINCT browsing_frequency FROM amazon_behavior;
+SELECT DISTINCT purchase_categories FROM amazon_behavior;
+
+
+SELECT * FROM amazon_behavior
+----Kuadran Intensi Navigasi & Eksplorasi
+SELECT DISTINCT product_search_method FROM amazon_behavior;(3)
+SELECT DISTINCT search_result_exploration FROM amazon_behavior;(4)
+
+
+----Kuadran Gesekan (Friction) & Perilaku Keranjang
+SELECT DISTINCT add_to_cart_browsing FROM amazon_behavior;
+SELECT DISTINCT cart_completion_frequency FROM amazon_behavior; 
+SELECT DISTINCT cart_abandonment_factors FROM amazon_behavior;
+SELECT DISTINCT saveforlater_frequency FROM amazon_behavior;
+
+
+----Kuadran Bukti Sosial (Social Proof) & Respons AI
+SELECT DISTINCT review_left FROM amazon_behavior;
+SELECT DISTINCT review_reliability FROM amazon_behavior;
+SELECT DISTINCT review_helpfulness FROM amazon_behavior;
+SELECT DISTINCT personalized_recommendation_frequency FROM amazon_behavior;
+SELECT DISTINCT recommendation_helpfulness FROM amazon_behavior;
+
+SELECT * FROM amazon_behavior
+----Kuadran Pasca-Pembelian (Kepuasan & Komplain)
+SELECT DISTINCT service_appreciation FROM amazon_behavior;
+SELECT DISTINCT improvement_areas FROM amazon_behavior;
+
+-----New Kuadran
+SELECT DISTINCT personalized_recommendation_score FROM amazon_behavior
+SELECT DISTINCT rating_accuracy_score FROM amazon_behavior
+SELECT DISTINCT shopping_satisfaction FROM amazon_behavior
+SELECT DISTINCT customer_reviews_importance FROM amazon_behavior
