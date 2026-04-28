@@ -99,6 +99,19 @@ LEFT JOIN dim_conversion_stimulus s ON t.stimulus_id = s.stimulus_id
 LEFT JOIN fact_post_purchase_behavior p ON t.transaction_id = p.transaction_id
 WHERE t.is_stimulus_driven = TRUE 
   AND EXTRACT(EPOCH FROM (t.checkout_timestamp - vi.exposure_timestamp)) / 60 <= 120;  
+--------------------------------------------------------------------------------------------------------------------
+DAX BI
+% Cancellation Rate = DIVIDE(SUM('Query1'[is_cancelled_int]), COUNT(Query1[transaction_id]), 0)
+% Late Payment Risk = DIVIDE(SUM('Query1'[is_late_payment_int]), COUNT('Query1'[transaction_id]), 0)
+% PayLater Usage = 
+DIVIDE(
+    CALCULATE(COUNTROWS('Query1'), 'Query1'[payment_method]= "PayLater"),
+    COUNTROWS('Query1'),
+    0
+)
+
+Avg Conversion Mins = AVERAGE('Query1'[conversion_time_mins])
+Total Transactions = COUNT('Query1'[transaction_id])
 
 
 
