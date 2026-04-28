@@ -1,0 +1,104 @@
+-- STEP 1: Menggabungkan funnel dari titik exposure sampai post-purchase
+WITH Base_Journey AS (
+    SELECT 
+        t.transaction_id,
+        t.user_id,
+        s.stimulus_category,
+        i.exposure_timestamp,
+        t.checkout_timestamp,
+        -- Menghitung Time-to-Conversion dalam menit
+        EXTRACT(EPOCH FROM (t.checkout_timestamp - i.exposure_timestamp)) / 60 AS conversion_time_mins,
+        t.payment_method,
+        p.order_status,
+        p.cancellation_reason
+    FROM fact_transactions t
+    JOIN fact_user_interactions i 
+        ON t.user_id = i.user_id AND t.stimulus_id = i.stimulus_id
+    JOIN dim_conversion_stimulus s 
+        ON t.stimulus_id = s.stimulus_id
+    JOIN fact_post_purchase_behavior p 
+        ON t.transaction_id = p.transaction_id
+    WHERE t.is_stimulus_driven = TRUE 
+  AND t.checkout_timestamp >= i.exposure_timestamp 
+),
+
+-- STEP 2: Mengklasifikasikan Cognitive State (Level Kepanikan)
+Cognitive_Segmentation AS (
+    SELECT 
+        *,
+        CASE 
+            WHEN conversion_time_mins <= 10 THEN '1. Hyper-Impulsive (<10 mins)'
+            WHEN conversion_time_mins <= 30 THEN '2. Moderate (10-30 mins)'
+            ELSE '3. Rational Planner (>30 mins)'
+        END AS cognitive_state
+    FROM Base_Journey
+)
+
+-- STEP 3: Agregasi Business Metrics untuk Dashboard
+SELECT 
+    stimulus_category,
+    cognitive_state,
+    COUNT(transaction_id) AS total_bookings,
+    ROUND(AVG(conversion_time_mins), 2) AS avg_conversion_mins,
+    
+    -- Menghitung total pembatalan
+    SUM(CASE WHEN order_status = 'Cancelled' THEN 1 ELSE 0 END) AS total_cancellations,
+    
+    -- Menghitung persentase Cancellation Rate (Formula Utama)
+    ROUND(
+        SUM(CASE WHEN order_status = 'Cancelled' THEN 1 ELSE 0 END) * 100.0 / COUNT(transaction_id), 2
+    ) AS cancellation_rate_pct
+
+FROM Cognitive_Segmentation
+GROUP BY 
+    stimulus_category, 
+    cognitive_state
+ORDER BY 
+    stimulus_category, 
+    cognitive_state;
+
+
+----------------------------------------------------------------------------------------------------------------------
+WITH Clean_Interactions AS (
+    SELECT 
+        t.transaction_id,
+        i.exposure_timestamp,
+        ROW_NUMBER() OVER(PARTITION BY t.transaction_id ORDER BY i.exposure_timestamp DESC) as rn
+    FROM fact_transactions t
+    JOIN fact_user_interactions i 
+        ON t.user_id = i.user_id AND t.stimulus_id = i.stimulus_id
+    WHERE i.exposure_timestamp <= t.checkout_timestamp
+),
+Valid_Interactions AS (
+    SELECT transaction_id, exposure_timestamp 
+    FROM Clean_Interactions 
+    WHERE rn = 1
+)
+SELECT 
+    t.transaction_id,
+    u.age_group,
+    CASE WHEN u.avg_monthly_income >= 10000000 THEN 'High Income' ELSE 'Low Income' END AS income_bracket,
+    s.stimulus_category,
+    vi.exposure_timestamp,
+    t.checkout_timestamp,
+    
+    ROUND((EXTRACT(EPOCH FROM (t.checkout_timestamp - vi.exposure_timestamp)) / 60)::numeric, 2) AS conversion_time_mins,
+    
+    t.payment_method,
+    CASE WHEN t.payment_method = 'PayLater' THEN 1 ELSE 0 END AS is_paylater_int,
+    t.is_impulsive_flag,
+    p.order_status,
+    p.cancellation_reason,
+    CASE WHEN p.order_status = 'Cancelled' THEN 1 ELSE 0 END AS is_cancelled_int,
+    p.is_late_payment,
+    CASE WHEN p.is_late_payment = TRUE THEN 1 ELSE 0 END AS is_late_payment_int
+FROM fact_transactions t
+JOIN Valid_Interactions vi ON t.transaction_id = vi.transaction_id
+LEFT JOIN dim_users u ON t.user_id = u.user_id
+LEFT JOIN dim_conversion_stimulus s ON t.stimulus_id = s.stimulus_id
+LEFT JOIN fact_post_purchase_behavior p ON t.transaction_id = p.transaction_id
+WHERE t.is_stimulus_driven = TRUE 
+  AND EXTRACT(EPOCH FROM (t.checkout_timestamp - vi.exposure_timestamp)) / 60 <= 120;  
+
+
+
